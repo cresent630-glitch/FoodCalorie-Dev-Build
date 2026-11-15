@@ -1,0 +1,110 @@
+name: Private iOS build
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Full commit SHA from the private FoodCalorie-Dev source repository
+        required: true
+        type: string
+      run_unit_tests:
+        description: Run simulator unit tests
+        type: boolean
+        default: true
+      run_ui_tests:
+        description: Run simulator UI tests
+        type: boolean
+        default: false
+      build_simulator_release:
+        description: Build simulator Release
+        type: boolean
+        default: false
+
+permissions: {}
+concurrency:
+  group: foodcalorie-dev-private-build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: xcode-27
+    timeout-minutes: 90
+    steps:
+      - name: Validate source revision
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'Expected a full lowercase commit SHA.'; exit 1; }
+      - name: Checkout private source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: cresent630-glitch/FoodCalorie-Dev
+          ref: ${{ inputs.source_sha }}
+          token: ${{ secrets.SOURCE_REPO_TOKEN }}
+          persist-credentials: false
+          path: source
+      - name: Prepare build environment
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/private-logs"
+          { xcodebuild -version; xcrun --sdk iphoneos --show-sdk-version; brew install xcodegen; xcodegen --version; } > "$RUNNER_TEMP/private-logs/tools.log" 2>&1 || { echo 'Tool preparation failed; see private logs.'; exit 1; }
+          test "$(git -C source rev-parse HEAD)" = "$SOURCE_SHA"
+      - name: Prepare simulator
+        id: simulator
+        if: ${{ inputs.run_unit_tests || inputs.run_ui_tests || inputs.build_simulator_release }}
+        run: |
+          set -euo pipefail
+          device=$(xcrun simctl list devices available --json | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; a=[v["udid"] for k,vs in sorted(d.items(),reverse=True) if "iOS-27" in k for v in vs if v["name"] == "iPhone 18 Pro" and v.get("isAvailable")]; assert a; print(a[0])')
+          { xcrun simctl boot "$device"; xcrun simctl bootstatus "$device" -b; } > "$RUNNER_TEMP/private-logs/simulator.log" 2>&1 || { echo 'Simulator preparation failed; see private logs.'; exit 1; }
+          echo "id=$device" >> "$GITHUB_OUTPUT"
+      - name: Run unit tests
+        if: ${{ inputs.run_unit_tests }}
+        env:
+          SIMULATOR_ID: ${{ steps.simulator.outputs.id }}
+        run: |
+          cd source
+          bash scripts/mac-build.sh test "$SIMULATOR_ID" Unit > "$RUNNER_TEMP/private-logs/unit.log" 2>&1 || { echo 'Unit tests failed; see private logs.'; exit 1; }
+      - name: Run UI tests
+        if: ${{ inputs.run_ui_tests }}
+        env:
+          SIMULATOR_ID: ${{ steps.simulator.outputs.id }}
+        run: |
+          cd source
+          bash scripts/mac-build.sh test "$SIMULATOR_ID" UI > "$RUNNER_TEMP/private-logs/ui.log" 2>&1 || { echo 'UI tests failed; see private logs.'; exit 1; }
+      - name: Build simulator Release
+        if: ${{ inputs.build_simulator_release }}
+        env:
+          SIMULATOR_ID: ${{ steps.simulator.outputs.id }}
+        run: |
+          cd source
+          bash scripts/mac-build.sh release "$SIMULATOR_ID" > "$RUNNER_TEMP/private-logs/simulator-release.log" 2>&1 || { echo 'Simulator Release failed; see private logs.'; exit 1; }
+      - name: Build unsigned device IPA
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          cd source
+          bash scripts/mac-package-ipa.sh > "$RUNNER_TEMP/private-logs/device.log" 2>&1 || { echo 'Device build failed; see private logs.'; exit 1; }
+          { printf 'commit=%s\nrun_id=%s\nrun_attempt=%s\n' "$SOURCE_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"; xcodebuild -version; xcodegen --version; } > build/ipa/build-source.txt
+      - name: Publish private output
+        if: ${{ always() && steps.simulator.outcome != 'cancelled' }}
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_OUTPUT_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/private-logs"
+          cd "$RUNNER_TEMP"
+          /usr/bin/ditto -c -k --keepParent private-logs private-logs.zip
+          assets=("$RUNNER_TEMP/private-logs.zip")
+          if [ -d "$GITHUB_WORKSPACE/source/build/ipa" ]; then
+            /usr/bin/ditto -c -k --keepParent "$GITHUB_WORKSPACE/source/build/ipa" "$RUNNER_TEMP/FoodCalorie-ipa.zip"
+            assets+=("$RUNNER_TEMP/FoodCalorie-ipa.zip")
+          fi
+          if compgen -G "$GITHUB_WORKSPACE/source/build/*.xcresult" >/dev/null; then
+            mkdir -p "$RUNNER_TEMP/test-results"
+            for result in "$GITHUB_WORKSPACE"/source/build/*.xcresult; do /usr/bin/ditto "$result" "$RUNNER_TEMP/test-results/$(basename "$result")"; done
+            /usr/bin/ditto -c -k --keepParent "$RUNNER_TEMP/test-results" "$RUNNER_TEMP/FoodCalorie-test-results.zip"
+            assets+=("$RUNNER_TEMP/FoodCalorie-test-results.zip")
+          fi
+          gh release create "build-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" "${assets[@]}" --repo cresent630-glitch/FoodCalorie-Dev-Releases --target main --title "Private build ${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" --notes "Private build output; IPA requires local signing." > "$RUNNER_TEMP/publish.log" 2>&1 || { echo 'Private output publication failed.'; exit 1; }
