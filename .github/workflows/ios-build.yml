@@ -22,7 +22,7 @@ on:
 
 permissions: {}
 concurrency:
-  group: foodcalorie-dev-private-build
+  group: foodcalorie-dev-private-build-v2
   cancel-in-progress: false
 
 jobs:
