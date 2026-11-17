@@ -97,7 +97,7 @@ jobs:
           cd "$RUNNER_TEMP"
           /usr/bin/ditto -c -k --keepParent private-logs private-logs.zip
           assets=("$RUNNER_TEMP/private-logs.zip")
-          if [ -d "$GITHUB_WORKSPACE/source/build/ipa" ]; then
+          if compgen -G "$GITHUB_WORKSPACE/source/build/ipa/*.ipa" >/dev/null; then
             /usr/bin/ditto -c -k --keepParent "$GITHUB_WORKSPACE/source/build/ipa" "$RUNNER_TEMP/FoodCalorie-ipa.zip"
             assets+=("$RUNNER_TEMP/FoodCalorie-ipa.zip")
           fi
