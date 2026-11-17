@@ -107,4 +107,18 @@ jobs:
             /usr/bin/ditto -c -k --keepParent "$RUNNER_TEMP/test-results" "$RUNNER_TEMP/FoodCalorie-test-results.zip"
             assets+=("$RUNNER_TEMP/FoodCalorie-test-results.zip")
           fi
-          gh release create "build-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" "${assets[@]}" --repo cresent630-glitch/FoodCalorie-Dev-Releases --target main --title "Private build ${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" --notes "Private build output; IPA requires local signing." > "$RUNNER_TEMP/publish.log" 2>&1 || { echo 'Private output publication failed.'; exit 1; }
+          publish_release() {
+            gh release create "build-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" "${assets[@]}" \
+              --repo cresent630-glitch/FoodCalorie-Dev-Releases --target main \
+              --title "Private build ${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+              --notes "Private build output; IPA requires local signing."
+          }
+          if ! publish_release > "$RUNNER_TEMP/publish.log" 2>&1; then
+            echo 'Private output publication failed; retrying once.'
+            sleep 5
+            if ! publish_release >> "$RUNNER_TEMP/publish.log" 2>&1; then
+              echo 'Private output publication failed.'
+              tail -40 "$RUNNER_TEMP/publish.log" || true
+              exit 1
+            fi
+          fi
