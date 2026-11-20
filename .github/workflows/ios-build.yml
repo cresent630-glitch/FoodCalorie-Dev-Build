@@ -22,7 +22,7 @@ on:
 
 permissions: {}
 concurrency:
-  group: foodcalorie-dev-private-build-v2
+  group: foodcalorie-dev-ios27-upgrade-verification
   cancel-in-progress: false
 
 jobs:
