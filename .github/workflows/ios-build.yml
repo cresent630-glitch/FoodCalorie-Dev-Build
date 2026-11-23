@@ -22,7 +22,7 @@ on:
 
 permissions: {}
 concurrency:
-  group: foodcalorie-dev-ios27-upgrade-verification
+  group: foodcalorie-dev-ios27-layout-verification
   cancel-in-progress: false
 
 jobs:
@@ -72,7 +72,7 @@ jobs:
           SIMULATOR_ID: ${{ steps.simulator.outputs.id }}
         run: |
           cd source
-          bash scripts/mac-build.sh test "$SIMULATOR_ID" UI > "$RUNNER_TEMP/private-logs/ui.log" 2>&1 || { echo 'UI tests failed; see private logs.'; exit 1; }
+          bash scripts/mac-build.sh test "$SIMULATOR_ID" UIVisualFeedback > "$RUNNER_TEMP/private-logs/ui.log" 2>&1 || { echo 'UI tests failed; see private logs.'; exit 1; }
       - name: Build simulator Release
         if: ${{ inputs.build_simulator_release }}
         env:
