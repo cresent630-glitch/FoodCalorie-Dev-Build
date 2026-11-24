@@ -1,0 +1,43 @@
+name: Watch private main
+
+# Private-repo Actions currently cannot start jobs when GitHub billing blocks them.
+# This public-repo check requests unit tests for a main commit that has no cloud-build status yet.
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: watch-private-main
+  cancel-in-progress: true
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Request unit tests when main has not been marked
+        env:
+          SOURCE_TOKEN: ${{ secrets.SOURCE_REPO_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${SOURCE_TOKEN:-}" ]]; then
+            echo '::warning::SOURCE_REPO_TOKEN is not configured; private main was not checked.'
+            exit 0
+          fi
+          sha=$(GH_TOKEN="$SOURCE_TOKEN" gh api repos/cresent630-glitch/FoodCalorie-Dev/commits/main --jq .sha)
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo 'Private main SHA was not readable.'; exit 1; }
+          marked=$(GH_TOKEN="$SOURCE_TOKEN" gh api "repos/cresent630-glitch/FoodCalorie-Dev/commits/$sha/status" \
+            --jq '[.statuses[] | select(.context=="cloud-build")] | length')
+          if [[ "$marked" != 0 ]]; then
+            echo "main $sha already has a cloud-build status."
+            exit 0
+          fi
+          gh workflow run ios-build.yml --repo "${GITHUB_REPOSITORY}" --ref main \
+            -f source_sha="$sha" -f run_unit_tests=true -f run_ui_tests=false -f build_simulator_release=false
+          echo "Requested unit tests for $sha."
