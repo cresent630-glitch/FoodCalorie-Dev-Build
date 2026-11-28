@@ -6,9 +6,9 @@ Public workflow-only builder for the private [`FoodCalorie-Dev`](https://github.
 
 1. Push your commit to the private source repository. In that checkout, run `git rev-parse HEAD` to get the full 40-character commit SHA.
 2. Open [`Private iOS build`](https://github.com/cresent630-glitch/FoodCalorie-Dev-Build/actions/workflows/ios-build.yml), select **Run workflow**, and enter the SHA. The default runs unit tests and reports the result on the source commit. Detailed logs and test bundles stay on the temporary runner. UI tests and a simulator Release build are separate options.
-3. To package a device IPA and retain diagnostics, enable `package_ipa`. Check the device build and publication steps, then open [the private releases](https://github.com/cresent630-glitch/FoodCalorie-Dev-Releases/releases) and find `build-<run-id>-<attempt>`, using the run ID from the Actions URL. A delivery rerun publishes under a new attempt number.
+3. Get the project owner's explicit approval before using storage for a run or rerun. Select `storage_approved` to record that approval, then select only the approved output. `package_ipa` publishes the device package. `publish_diagnostics` retains detailed logs and available test results. Check [the private releases](https://github.com/cresent630-glitch/FoodCalorie-Dev-Releases/releases) for `build-<run-id>-<attempt>`. Prefer reusing an existing delivery for the same source revision.
 
-The release includes `private-logs.zip` and any available `FoodCalorie-test-results.zip`. A successful device build also includes `FoodCalorie-ipa.zip`, with the unsigned IPA and `build-source.txt` recording its source revision and build tools. Sign the IPA before installing or distributing it. Failed builds can still publish a release containing diagnostics.
+A successful package includes `FoodCalorie-ipa.zip`, with the unsigned IPA and `build-source.txt` recording its source revision and build tools. Sign the IPA before installing or distributing it. A run without a successful package publishes a release only when diagnostics were requested. Private releases remain available until the owner cleans them up.
 
 ## Maintain repository access
 

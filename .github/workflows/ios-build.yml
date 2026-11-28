@@ -21,7 +21,15 @@ on:
         type: boolean
         default: false
       package_ipa:
-        description: Package device IPA and publish output to the private releases repository
+        description: Package and publish the device IPA to the private releases repository
+        type: boolean
+        default: false
+      publish_diagnostics:
+        description: Publish detailed logs and test results to the private releases repository
+        type: boolean
+        default: false
+      storage_approved:
+        description: Confirm the project owner approved storage for this run
         type: boolean
         default: false
 
@@ -35,6 +43,16 @@ jobs:
     runs-on: xcode-27
     timeout-minutes: 90
     steps:
+      - name: Check storage approval
+        id: storage
+        env:
+          OUTPUT_REQUESTED: ${{ inputs.package_ipa || inputs.publish_diagnostics }}
+          STORAGE_APPROVED: ${{ inputs.storage_approved }}
+        run: |
+          if [[ "$OUTPUT_REQUESTED" == true && "$STORAGE_APPROVED" != true ]]; then
+            echo '::error::Obtain project owner approval before selecting storage_approved.'
+            exit 1
+          fi
       - name: Validate source revision
         env:
           SOURCE_SHA: ${{ inputs.source_sha }}
@@ -70,7 +88,7 @@ jobs:
             curl -fsSL -o "$RUNNER_TEMP/xcodegen.zip" "https://github.com/yonaskolb/XcodeGen/releases/download/$XCODEGEN_VERSION/xcodegen.zip" &&
             echo "$XCODEGEN_SHA256  $RUNNER_TEMP/xcodegen.zip" | shasum -a 256 -c - &&
             unzip -q "$RUNNER_TEMP/xcodegen.zip" -d "$RUNNER_TEMP" &&
-            "$RUNNER_TEMP/xcodegen/bin/xcodegen" --version; } > "$RUNNER_TEMP/private-logs/tools.log" 2>&1 || { echo 'Tool preparation failed; see private logs.'; exit 1; }
+            "$RUNNER_TEMP/xcodegen/bin/xcodegen" --version; } > "$RUNNER_TEMP/private-logs/tools.log" 2>&1 || { echo 'Tool preparation failed. Detailed logs require publish_diagnostics.'; exit 1; }
           echo "$RUNNER_TEMP/xcodegen/bin" >> "$GITHUB_PATH"
           test "$(git -C source rev-parse HEAD)" = "$SOURCE_SHA"
       - name: Prepare simulator
@@ -79,7 +97,7 @@ jobs:
         run: |
           set -euo pipefail
           device=$(xcrun simctl list devices available --json | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; a=[v["udid"] for k,vs in sorted(d.items(),reverse=True) if "iOS-27" in k for v in vs if v["name"] == "iPhone 18 Pro" and v.get("isAvailable")]; assert a; print(a[0])')
-          { xcrun simctl boot "$device"; xcrun simctl bootstatus "$device" -b; } > "$RUNNER_TEMP/private-logs/simulator.log" 2>&1 || { echo 'Simulator preparation failed; see private logs.'; exit 1; }
+          { xcrun simctl boot "$device"; xcrun simctl bootstatus "$device" -b; } > "$RUNNER_TEMP/private-logs/simulator.log" 2>&1 || { echo 'Simulator preparation failed. Detailed logs require publish_diagnostics.'; exit 1; }
           echo "id=$device" >> "$GITHUB_OUTPUT"
       - name: Run unit tests
         if: ${{ inputs.run_unit_tests }}
@@ -87,56 +105,60 @@ jobs:
           SIMULATOR_ID: ${{ steps.simulator.outputs.id }}
         run: |
           cd source
-          bash scripts/mac-build.sh test "$SIMULATOR_ID" Unit > "$RUNNER_TEMP/private-logs/unit.log" 2>&1 || { echo 'Unit tests failed. Detailed logs are published privately only with package_ipa.'; exit 1; }
+          bash scripts/mac-build.sh test "$SIMULATOR_ID" Unit > "$RUNNER_TEMP/private-logs/unit.log" 2>&1 || { echo 'Unit tests failed. Detailed logs require publish_diagnostics.'; exit 1; }
       - name: Run UI tests
         if: ${{ inputs.run_ui_tests }}
         env:
           SIMULATOR_ID: ${{ steps.simulator.outputs.id }}
         run: |
           cd source
-          bash scripts/mac-build.sh test "$SIMULATOR_ID" UI > "$RUNNER_TEMP/private-logs/ui.log" 2>&1 || { echo 'UI tests failed; see private logs.'; exit 1; }
+          bash scripts/mac-build.sh test "$SIMULATOR_ID" UI > "$RUNNER_TEMP/private-logs/ui.log" 2>&1 || { echo 'UI tests failed. Detailed logs require publish_diagnostics.'; exit 1; }
       - name: Build simulator Release
         if: ${{ inputs.build_simulator_release }}
         env:
           SIMULATOR_ID: ${{ steps.simulator.outputs.id }}
         run: |
           cd source
-          bash scripts/mac-build.sh release "$SIMULATOR_ID" > "$RUNNER_TEMP/private-logs/simulator-release.log" 2>&1 || { echo 'Simulator Release failed; see private logs.'; exit 1; }
+          bash scripts/mac-build.sh release "$SIMULATOR_ID" > "$RUNNER_TEMP/private-logs/simulator-release.log" 2>&1 || { echo 'Simulator Release failed. Detailed logs require publish_diagnostics.'; exit 1; }
       - name: Build unsigned device IPA
-        if: ${{ inputs.package_ipa }}
+        if: ${{ inputs.storage_approved && inputs.package_ipa }}
         id: device
         env:
           SOURCE_SHA: ${{ inputs.source_sha }}
         run: |
           set -euo pipefail
           cd source
-          bash scripts/mac-package-ipa.sh > "$RUNNER_TEMP/private-logs/device.log" 2>&1 || { echo 'Device build failed; see private logs.'; exit 1; }
+          bash scripts/mac-package-ipa.sh > "$RUNNER_TEMP/private-logs/device.log" 2>&1 || { echo 'Device build failed. Detailed logs require publish_diagnostics.'; exit 1; }
           ipas=(build/ipa/*.ipa)
           for ipa in "${ipas[@]}"; do
             test -s "$ipa" || { echo 'Device build did not produce a non-empty IPA.'; exit 1; }
           done
           { printf 'commit=%s\nrun_id=%s\nrun_attempt=%s\n' "$SOURCE_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"; xcodebuild -version; xcodegen --version; } > build/ipa/build-source.txt
       - name: Publish private output
-        if: ${{ !cancelled() && inputs.package_ipa }}
+        if: ${{ !cancelled() && inputs.storage_approved && (steps.device.outcome == 'success' || inputs.publish_diagnostics) }}
         env:
           GH_TOKEN: ${{ secrets.PRIVATE_OUTPUT_TOKEN }}
           DEVICE_BUILD_OUTCOME: ${{ steps.device.outcome }}
+          PUBLISH_DIAGNOSTICS: ${{ inputs.publish_diagnostics }}
           SOURCE_SHA: ${{ inputs.source_sha }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/private-logs"
           cd "$RUNNER_TEMP"
-          /usr/bin/ditto -c -k --keepParent private-logs private-logs.zip
-          assets=("$RUNNER_TEMP/private-logs.zip")
+          assets=()
           if [[ "$DEVICE_BUILD_OUTCOME" == success ]]; then
             /usr/bin/ditto -c -k --keepParent "$GITHUB_WORKSPACE/source/build/ipa" "$RUNNER_TEMP/FoodCalorie-ipa.zip"
             assets+=("$RUNNER_TEMP/FoodCalorie-ipa.zip")
           fi
-          if compgen -G "$GITHUB_WORKSPACE/source/build/*.xcresult" >/dev/null; then
-            mkdir -p "$RUNNER_TEMP/test-results"
-            for result in "$GITHUB_WORKSPACE"/source/build/*.xcresult; do /usr/bin/ditto "$result" "$RUNNER_TEMP/test-results/$(basename "$result")"; done
-            /usr/bin/ditto -c -k --keepParent "$RUNNER_TEMP/test-results" "$RUNNER_TEMP/FoodCalorie-test-results.zip"
-            assets+=("$RUNNER_TEMP/FoodCalorie-test-results.zip")
+          if [[ "$PUBLISH_DIAGNOSTICS" == true ]]; then
+            /usr/bin/ditto -c -k --keepParent private-logs private-logs.zip
+            assets+=("$RUNNER_TEMP/private-logs.zip")
+            if compgen -G "$GITHUB_WORKSPACE/source/build/*.xcresult" >/dev/null; then
+              mkdir -p "$RUNNER_TEMP/test-results"
+              for result in "$GITHUB_WORKSPACE"/source/build/*.xcresult; do /usr/bin/ditto "$result" "$RUNNER_TEMP/test-results/$(basename "$result")"; done
+              /usr/bin/ditto -c -k --keepParent "$RUNNER_TEMP/test-results" "$RUNNER_TEMP/FoodCalorie-test-results.zip"
+              assets+=("$RUNNER_TEMP/FoodCalorie-test-results.zip")
+            fi
           fi
           repo=cresent630-glitch/FoodCalorie-Dev-Releases
           tag="build-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
@@ -144,7 +166,7 @@ jobs:
           if [[ "$DEVICE_BUILD_OUTCOME" == success ]]; then
             notes="$notes The IPA requires local signing."
           else
-            notes="$notes Device build did not succeed. See the private diagnostics."
+            notes="$notes Private diagnostics for this run."
           fi
 
           publish_release() {
@@ -175,7 +197,7 @@ jobs:
           echo 'Private output publication failed. Check the private destination and the output token.'
           exit 1
       - name: Report result to source commit
-        if: ${{ always() }}
+        if: ${{ always() && steps.storage.outcome == 'success' }}
         env:
           GH_TOKEN: ${{ secrets.SOURCE_REPO_TOKEN }}
           SOURCE_SHA: ${{ inputs.source_sha }}
