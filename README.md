@@ -4,6 +4,8 @@ Public workflow-only builder for the private [`FoodCalorie-Dev`](https://github.
 
 ## Test or package a source revision
 
+`Watch private main` checks the current private `main` revision on a schedule and requests unit tests for revisions without a public builder run. Pull requests can be tested before merge by dispatching their source SHA manually.
+
 1. Push your commit to the private source repository. In that checkout, run `git rev-parse HEAD` to get the full 40-character commit SHA.
 2. Open [`Private iOS build`](https://github.com/cresent630-glitch/FoodCalorie-Dev-Build/actions/workflows/ios-build.yml), select **Run workflow**, and enter the SHA. The default runs unit tests and reports the result on the source commit. Detailed logs and test bundles stay on the temporary runner. UI tests and a simulator Release build are separate options.
 3. Get the project owner's explicit approval before using storage for a run or rerun. Select `storage_approved` to record that approval, then select only the approved output. `package_ipa` publishes the device package. `publish_diagnostics` retains detailed logs and available test results. Check [the private releases](https://github.com/cresent630-glitch/FoodCalorie-Dev-Releases/releases) for `build-<run-id>-<attempt>`. Prefer reusing an existing delivery for the same source revision.
