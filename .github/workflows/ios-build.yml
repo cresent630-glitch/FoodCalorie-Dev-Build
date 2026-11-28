@@ -20,6 +20,10 @@ on:
         description: Build simulator Release
         type: boolean
         default: false
+      package_ipa:
+        description: Package device IPA and publish output to the private releases repository
+        type: boolean
+        default: false
 
 permissions: {}
 concurrency:
@@ -83,7 +87,7 @@ jobs:
           SIMULATOR_ID: ${{ steps.simulator.outputs.id }}
         run: |
           cd source
-          bash scripts/mac-build.sh test "$SIMULATOR_ID" Unit > "$RUNNER_TEMP/private-logs/unit.log" 2>&1 || { echo 'Unit tests failed; see private logs.'; exit 1; }
+          bash scripts/mac-build.sh test "$SIMULATOR_ID" Unit > "$RUNNER_TEMP/private-logs/unit.log" 2>&1 || { echo 'Unit tests failed. Detailed logs are published privately only with package_ipa.'; exit 1; }
       - name: Run UI tests
         if: ${{ inputs.run_ui_tests }}
         env:
@@ -99,6 +103,7 @@ jobs:
           cd source
           bash scripts/mac-build.sh release "$SIMULATOR_ID" > "$RUNNER_TEMP/private-logs/simulator-release.log" 2>&1 || { echo 'Simulator Release failed; see private logs.'; exit 1; }
       - name: Build unsigned device IPA
+        if: ${{ inputs.package_ipa }}
         id: device
         env:
           SOURCE_SHA: ${{ inputs.source_sha }}
@@ -112,7 +117,7 @@ jobs:
           done
           { printf 'commit=%s\nrun_id=%s\nrun_attempt=%s\n' "$SOURCE_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"; xcodebuild -version; xcodegen --version; } > build/ipa/build-source.txt
       - name: Publish private output
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && inputs.package_ipa }}
         env:
           GH_TOKEN: ${{ secrets.PRIVATE_OUTPUT_TOKEN }}
           DEVICE_BUILD_OUTCOME: ${{ steps.device.outcome }}
@@ -177,11 +182,12 @@ jobs:
           JOB_STATUS: ${{ job.status }}
           UNIT: ${{ inputs.run_unit_tests }}
           UI: ${{ inputs.run_ui_tests }}
+          PACKAGE_IPA: ${{ inputs.package_ipa }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 0
           case "$JOB_STATUS" in success) state=success ;; failure) state=failure ;; *) state=error ;; esac
           gh api -X POST "repos/cresent630-glitch/FoodCalorie-Dev/statuses/$SOURCE_SHA" -f state="$state" \
-            -f context=cloud-build -f description="Cloud build $JOB_STATUS (unit tests: $UNIT, UI tests: $UI)" \
+            -f context=cloud-build -f description="Cloud run $JOB_STATUS (unit: $UNIT, UI: $UI, IPA requested: $PACKAGE_IPA)" \
             -f target_url="$RUN_URL" >/dev/null 2>&1 ||
             echo '::warning::Commit status not reported; SOURCE_REPO_TOKEN needs Commit statuses read and write.'

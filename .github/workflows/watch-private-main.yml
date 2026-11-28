@@ -39,5 +39,5 @@ jobs:
             exit 0
           fi
           gh workflow run ios-build.yml --repo "${GITHUB_REPOSITORY}" --ref main \
-            -f source_sha="$sha" -f run_unit_tests=true -f run_ui_tests=false -f build_simulator_release=false
+            -f source_sha="$sha" -f run_unit_tests=true -f run_ui_tests=false -f build_simulator_release=false -f package_ipa=false
           echo "Requested unit tests for $sha."
